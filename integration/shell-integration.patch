@@ -1,0 +1,394 @@
+diff --git a/modules/bar/popouts/Audio.qml b/modules/bar/popouts/Audio.qml
+index afae927..3b8ec83 100644
+--- a/modules/bar/popouts/Audio.qml
++++ b/modules/bar/popouts/Audio.qml
+@@ -14,6 +14,15 @@ Item {
+ 
+     required property PopoutState popouts
+ 
++    readonly property var sinkView: {
++        AudioPresentation.revision; // re-evaluate when the provider changes
++        return AudioPresentation.view("sink");
++    }
++    readonly property var sourceView: {
++        AudioPresentation.revision; // re-evaluate when the provider changes
++        return AudioPresentation.view("source");
++    }
++
+     implicitWidth: layout.implicitWidth + Tokens.padding.medium * 2
+     implicitHeight: layout.implicitHeight + Tokens.padding.medium * 2
+ 
+@@ -38,17 +47,31 @@ Item {
+         }
+ 
+         Repeater {
+-            model: Audio.sinks
++            model: root.sinkView.entries
+ 
+             StyledRadioButton {
+                 id: control
+ 
+-                required property PwNode modelData
++                required property var modelData
+ 
+                 ButtonGroup.group: sinks
+-                checked: Audio.sink?.id === modelData.id
+-                onClicked: Audio.setAudioSink(modelData)
+-                text: modelData.description
++                checked: !!modelData.isDefault
++                opacity: modelData.hidden ? 0.6 : 1
++                onClicked: AudioPresentation.select(modelData)
++                text: modelData.routed ? qsTr("%1 · via Spatial Audio").arg(modelData.label) : modelData.label
++            }
++        }
++
++        StyledText {
++            visible: root.sinkView.hiddenCount > 0 || AudioPresentation.revealSinks
++            text: AudioPresentation.revealSinks ? qsTr("Hide extra outputs") : qsTr("Show %n more", "", root.sinkView.hiddenCount)
++            color: Colours.palette.m3outline
++            font: Tokens.font.label.medium
++
++            CustomMouseArea {
++                anchors.fill: parent
++                cursorShape: Qt.PointingHandCursor
++                onClicked: AudioPresentation.toggleReveal("sink")
+             }
+         }
+ 
+@@ -59,15 +82,29 @@ Item {
+         }
+ 
+         Repeater {
+-            model: Audio.sources
++            model: root.sourceView.entries
+ 
+             StyledRadioButton {
+-                required property PwNode modelData
++                required property var modelData
+ 
+                 ButtonGroup.group: sources
+-                checked: Audio.source?.id === modelData.id
+-                onClicked: Audio.setAudioSource(modelData)
+-                text: modelData.description
++                checked: !!modelData.isDefault
++                opacity: modelData.hidden ? 0.6 : 1
++                onClicked: AudioPresentation.select(modelData)
++                text: modelData.label
++            }
++        }
++
++        StyledText {
++            visible: root.sourceView.hiddenCount > 0 || AudioPresentation.revealSources
++            text: AudioPresentation.revealSources ? qsTr("Hide extra inputs") : qsTr("Show %n more", "", root.sourceView.hiddenCount)
++            color: Colours.palette.m3outline
++            font: Tokens.font.label.medium
++
++            CustomMouseArea {
++                anchors.fill: parent
++                cursorShape: Qt.PointingHandCursor
++                onClicked: AudioPresentation.toggleReveal("source")
+             }
+         }
+ 
+diff --git a/modules/nexus/common/AudioDeviceList.qml b/modules/nexus/common/AudioDeviceList.qml
+index 8aacb57..d785b9a 100644
+--- a/modules/nexus/common/AudioDeviceList.qml
++++ b/modules/nexus/common/AudioDeviceList.qml
+@@ -15,22 +15,33 @@ ItemList {
+     property var nodes: []
+     property int currentId: -1
+     property string iconName: "speaker"
++    // "sink" / "source": list through AudioPresentation (aliases, hidden, groups)
++    property string kind: ""
++    readonly property var view: {
++        AudioPresentation.revision; // re-evaluate when the provider changes
++        return kind ? AudioPresentation.view(kind) : null;
++    }
++    readonly property int hiddenCount: view?.hiddenCount ?? 0
++    readonly property bool revealed: kind ? AudioPresentation.revealed(kind) : false
+ 
+     signal selected(node: PwNode)
+ 
+     last: true
+     showList: true
++    extraHeight: revealRow.visible ? revealRow.implicitHeight : 0
+ 
+     model: ScriptModel {
+-        values: [...root.nodes].sort((a, b) => (a.description || a.name || "").localeCompare(b.description || b.name || ""))
++        values: root.view ? root.view.entries : [...root.nodes].sort((a, b) => (a.description || a.name || "").localeCompare(b.description || b.name || ""))
+     }
+ 
+     delegate: Item {
+         id: device
+ 
+-        required property PwNode modelData
++        required property var modelData
+         required property int index
+-        readonly property bool active: device.modelData?.id === root.currentId
++        readonly property bool presented: !!root.view
++        readonly property bool active: presented ? !!device.modelData?.isDefault : device.modelData?.id === root.currentId
++        readonly property string sublabel: presented ? (device.modelData?.sublabel ?? "") : ""
+ 
+         anchors.left: root.list.contentItem.left
+         anchors.right: root.list.contentItem.right
+@@ -38,9 +49,14 @@ ItemList {
+ 
+         StateLayer {
+             radius: Tokens.rounding.extraSmall
+-            bottomLeftRadius: device.index === root?.list.count - 1 ? Tokens.rounding.extraLarge : radius
+-            bottomRightRadius: device.index === root?.list.count - 1 ? Tokens.rounding.extraLarge : radius
+-            onClicked: root.selected(device.modelData)
++            bottomLeftRadius: device.index === root?.list.count - 1 && !revealRow.visible ? Tokens.rounding.extraLarge : radius
++            bottomRightRadius: device.index === root?.list.count - 1 && !revealRow.visible ? Tokens.rounding.extraLarge : radius
++            onClicked: {
++                if (device.presented)
++                    AudioPresentation.select(device.modelData);
++                else
++                    root.selected(device.modelData);
++            }
+         }
+ 
+         RowLayout {
+@@ -62,7 +78,7 @@ ItemList {
+                     id: devIcon
+ 
+                     anchors.centerIn: parent
+-                    text: root.iconName
++                    text: device.presented ? (device.modelData?.icon || root.iconName) : root.iconName
+                     color: device.active ? Colours.palette.m3onPrimary : Colours.palette.m3onSecondaryContainer
+                     font: Tokens.font.icon.medium
+                     fill: device.active ? 1 : 0
+@@ -73,11 +89,26 @@ ItemList {
+                 }
+             }
+ 
+-            StyledText {
++            ColumnLayout {
+                 Layout.fillWidth: true
+-                text: device.modelData?.description || device.modelData?.name || qsTr("Unknown")
+-                font: Tokens.font.body.small
+-                elide: Text.ElideRight
++                spacing: 0
++                opacity: device.modelData?.hidden ? 0.6 : 1
++
++                StyledText {
++                    Layout.fillWidth: true
++                    text: device.presented ? (device.modelData?.label || qsTr("Unknown")) : (device.modelData?.description || device.modelData?.name || qsTr("Unknown"))
++                    font: Tokens.font.body.small
++                    elide: Text.ElideRight
++                }
++
++                StyledText {
++                    Layout.fillWidth: true
++                    visible: device.sublabel.length > 0
++                    text: device.sublabel
++                    color: Colours.palette.m3outline
++                    font: Tokens.font.label.small
++                    elide: Text.ElideRight
++                }
+             }
+ 
+             MaterialIcon {
+@@ -94,4 +125,45 @@ ItemList {
+             }
+         }
+     }
++
++    Item {
++        id: revealRow
++
++        anchors.left: parent.left
++        anchors.right: parent.right
++        anchors.bottom: parent.bottom
++        visible: root.kind !== "" && (root.hiddenCount > 0 || root.revealed)
++        implicitHeight: revealLayout.implicitHeight + Tokens.padding.small * 2
++
++        StateLayer {
++            radius: Tokens.rounding.extraSmall
++            bottomLeftRadius: Tokens.rounding.extraLarge
++            bottomRightRadius: Tokens.rounding.extraLarge
++            onClicked: AudioPresentation.toggleReveal(root.kind)
++        }
++
++        RowLayout {
++            id: revealLayout
++
++            anchors.fill: parent
++            anchors.margins: Tokens.padding.small
++            anchors.leftMargin: Tokens.padding.largeIncreased
++            anchors.rightMargin: Tokens.padding.largeIncreased
++            spacing: Tokens.spacing.medium
++
++            MaterialIcon {
++                text: root.revealed ? "visibility_off" : "visibility"
++                color: Colours.palette.m3outline
++                font: Tokens.font.icon.small
++            }
++
++            StyledText {
++                Layout.fillWidth: true
++                text: root.revealed ? qsTr("Hide system and hidden devices") : qsTr("Show %n hidden device(s)", "", root.hiddenCount)
++                color: Colours.palette.m3outline
++                font: Tokens.font.label.medium
++                elide: Text.ElideRight
++            }
++        }
++    }
+ }
+diff --git a/modules/nexus/pages/AudioPage.qml b/modules/nexus/pages/AudioPage.qml
+index 8da9a79..6af5d7f 100644
+--- a/modules/nexus/pages/AudioPage.qml
++++ b/modules/nexus/pages/AudioPage.qml
+@@ -42,6 +42,7 @@ PageBase {
+         AudioDeviceList {
+             nodes: Audio.sinks
+             currentId: Audio.sink?.id ?? -1
++            kind: "sink"
+             iconName: "speaker"
+             placeholderIcon: "speaker"
+             placeholderText: qsTr("No output devices")
+@@ -71,6 +72,7 @@ PageBase {
+         AudioDeviceList {
+             nodes: Audio.sources
+             currentId: Audio.source?.id ?? -1
++            kind: "source"
+             iconName: "mic"
+             placeholderIcon: "mic_off"
+             placeholderText: qsTr("No input devices")
+diff --git a/services/Audio.qml b/services/Audio.qml
+index b4ffb0d..0e9ad42 100644
+--- a/services/Audio.qml
++++ b/services/Audio.qml
+@@ -115,7 +115,7 @@ Singleton {
+         if (!sink?.ready)
+             return;
+ 
+-        const newSinkName = sink.description || sink.name || qsTr("Unknown Device");
++        const newSinkName = AudioPresentation.displayName(sink, "sink") || qsTr("Unknown Device");
+ 
+         if (previousSinkName && previousSinkName !== newSinkName && GlobalConfig.utilities.toasts.audioOutputChanged)
+             Toaster.toast(qsTr("Audio output changed"), qsTr("Now using: %1").arg(newSinkName), "volume_up");
+@@ -127,7 +127,7 @@ Singleton {
+         if (!source?.ready)
+             return;
+ 
+-        const newSourceName = source.description || source.name || qsTr("Unknown Device");
++        const newSourceName = AudioPresentation.displayName(source, "source") || qsTr("Unknown Device");
+ 
+         if (previousSourceName && previousSourceName !== newSourceName && GlobalConfig.utilities.toasts.audioInputChanged)
+             Toaster.toast(qsTr("Audio input changed"), qsTr("Now using: %1").arg(newSourceName), "mic");
+diff --git a/services/AudioPresentation.qml b/services/AudioPresentation.qml
+new file mode 100644
+index 0000000..55db594
+--- /dev/null
++++ b/services/AudioPresentation.qml
+@@ -0,0 +1,109 @@
++pragma Singleton
++
++import QtQuick
++import Quickshell
++
++// Presentation hook for the audio device selectors (Nexus Audio page, bar
++// popout). A plugin such as dcqwqc/audiodevices registers itself as provider
++// to supply friendly names, hidden/grouped devices and smart selection. With
++// no provider the raw PipeWire lists are shown exactly as before.
++Singleton {
++    id: root
++
++    property QtObject provider: null
++    property bool revealSinks: false
++    property bool revealSources: false
++
++    readonly property int revision: provider ? provider.revision : 0
++
++    function register(p: QtObject): void {
++        provider = p;
++    }
++
++    function unregister(p: QtObject): void {
++        if (provider !== p)
++            return;
++        provider = null;
++        revealSinks = false;
++        revealSources = false;
++    }
++
++    function revealed(kind: string): bool {
++        return kind === "sink" ? revealSinks : revealSources;
++    }
++
++    function toggleReveal(kind: string): void {
++        if (kind === "sink")
++            revealSinks = !revealSinks;
++        else
++            revealSources = !revealSources;
++    }
++
++    // { entries: [{ key, label, sublabel, icon, isDefault, hidden, ref, ... }], hiddenCount }
++    function view(kind: string): var {
++        if (provider) {
++            try {
++                const v = provider.entries(kind, revealed(kind));
++                if (v && v.entries)
++                    return v;
++            } catch (e) {
++                console.warn("AudioPresentation: provider failed, showing raw devices:", e);
++            }
++        }
++        return fallback(kind);
++    }
++
++    function fallback(kind: string): var {
++        const nodes = kind === "sink" ? Audio.sinks : Audio.sources;
++        const current = kind === "sink" ? Audio.sink : Audio.source;
++        const entries = [...nodes].filter(n => n).map(n => ({
++                    key: n.name,
++                    kind: kind,
++                    label: n.description || n.name || qsTr("Unknown"),
++                    sublabel: "",
++                    icon: kind === "sink" ? "speaker" : "mic",
++                    ref: n,
++                    nodeName: n.name,
++                    isDefault: n.id === current?.id,
++                    routed: false,
++                    hidden: false
++                }));
++        entries.sort((a, b) => a.label.localeCompare(b.label));
++        return {
++            entries: entries,
++            hiddenCount: 0
++        };
++    }
++
++    function select(entry: var): void {
++        if (!entry)
++            return;
++        if (provider) {
++            try {
++                provider.select(entry);
++                return;
++            } catch (e) {
++                console.warn("AudioPresentation: provider select failed:", e);
++            }
++        }
++        if (!entry.ref)
++            return;
++        if (entry.kind === "source")
++            Audio.setAudioSource(entry.ref);
++        else
++            Audio.setAudioSink(entry.ref);
++    }
++
++    function displayName(node: var, kind: string): string {
++        if (!node)
++            return "";
++        if (provider) {
++            try {
++                const name = provider.displayName(node, kind);
++                if (name)
++                    return name;
++            } catch (e) {}
++        }
++        return node.description || node.name || "";
++    }
++}
