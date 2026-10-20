@@ -1,0 +1,17 @@
+[Unit]
+Description=Mirai internal-speaker accidental-mute self-healing
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/bin/mirai-audio-guard watch
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
