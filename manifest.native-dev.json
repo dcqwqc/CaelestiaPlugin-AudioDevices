@@ -1,0 +1,17 @@
+{
+  "name": "AudioDevices",
+  "version": "0.1.0",
+  "author": "dcqwqc",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-AudioDevices",
+  "icon": "speaker_group",
+  "description": "Friendly audio output and input choices for Caelestia: rename, hide, group and auto-name devices, hide disconnected displays, switch Speakers/Headphones profiles safely and keep Spatial Audio in the path.",
+  "entryPoints": [
+    {
+      "type": "custom",
+      "source": "Main.qml"
+    }
+  ],
+  "settings": "Settings.qml",
+  "settingsUi": "SettingsUi.qml",
+  "requires": ">=2.1.0"
+}
